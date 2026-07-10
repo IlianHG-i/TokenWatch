@@ -5,9 +5,13 @@ import SwiftUI
 ///
 /// Stratégie « événementiel d'abord » (cf. CLAUDE.md) :
 /// 1. refresh immédiat au lancement ;
-/// 2. refresh déclenché par FSEvents quand Claude écrit sur le disque ;
-/// 3. timer de secours lent (20 min) comme filet.
-/// Au repos : aucune requête réseau.
+/// 2. refresh déclenché par FSEvents quand Claude Code écrit sur le disque ;
+/// 3. timer de secours toutes les 2 min 30 comme filet.
+///
+/// Le filet couvre aussi l'usage via Claude Desktop / claude.ai, qui ne
+/// touchent pas `~/.claude/projects` et ne déclenchent donc pas (2) — la
+/// limite affichée reste exacte dans tous les cas (l'endpoint `/api/oauth/usage`
+/// est au niveau du compte, pas du client), seul le délai de mise à jour varie.
 @MainActor
 final class UsageStore: ObservableObject {
     @Published private(set) var snapshot: UsageSnapshot = .empty
@@ -35,7 +39,7 @@ final class UsageStore: ObservableObject {
         watcher.start()
         self.watcher = watcher
 
-        fallbackTimer = Timer.scheduledTimer(withTimeInterval: 20 * 60, repeats: true) { [weak self] _ in
+        fallbackTimer = Timer.scheduledTimer(withTimeInterval: 150, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
         }
     }
