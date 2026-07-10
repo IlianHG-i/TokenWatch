@@ -12,7 +12,8 @@ dans la barre de menu, vue détaillée dans l'app, et widgets sur le bureau.
 - ✅ Appel de l'endpoint d'usage officiel `GET /api/oauth/usage`.
 - ✅ Refresh OAuth automatique sur token expiré (`POST /v1/oauth/token`).
 - ✅ Rafraîchissement **événementiel** via FSEvents sur `~/.claude/projects`
-  (0 requête au repos) + timer de secours 20 min.
+  (instantané sur usage Claude Code) + timer de secours toutes les 2 min 30
+  (couvre aussi Claude Desktop / claude.ai, qui n'écrivent pas dans ce dossier).
 
 À suivre : figer le mapping exact de la réponse `/api/oauth/usage` (voir ci-dessous),
 puis Phase 2 (vue détaillée / historique JSONL) et Phase 3 (widgets). Feuille de
