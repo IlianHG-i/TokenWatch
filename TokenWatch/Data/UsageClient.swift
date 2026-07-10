@@ -53,15 +53,50 @@ struct UsageClient {
         return Self.parse(data)
     }
 
-    // MARK: - Parsing (best-effort tant que la forme exacte n'est pas figée)
+    // MARK: - Parsing
 
-    /// Mapping défensif : on ne connaît pas encore les noms de champs exacts de
-    /// la réponse, donc on scanne récursivement à la recherche d'un pourcentage
-    /// d'utilisation, et on garde le JSON brut pour finaliser le mapping.
+    /// Schéma réel de `GET /api/oauth/usage` (capturé sur une réponse 200).
+    /// `utilization` est déjà un pourcentage 0...100 ; `resets_at` est une
+    /// date ISO-8601 avec fraction de secondes.
+    private struct UsageResponse: Decodable {
+        struct Window: Decodable {
+            let utilization: Double?
+            let resets_at: String?
+        }
+        let five_hour: Window?
+        let seven_day: Window?
+    }
+
+    /// Décodage typé du schéma connu ; repli sur un scan heuristique si la forme
+    /// change (`rawJSON` conservé pour diagnostic).
     static func parse(_ data: Data) -> UsageSnapshot {
         var snapshot = UsageSnapshot(fetchedAt: Date())
         snapshot.rawJSON = String(data: data, encoding: .utf8)
 
+        if let decoded = try? JSONDecoder().decode(UsageResponse.self, from: data),
+           decoded.five_hour != nil || decoded.seven_day != nil {
+            snapshot.fiveHourPercent = decoded.five_hour?.utilization
+            snapshot.weeklyPercent = decoded.seven_day?.utilization
+            snapshot.fiveHourResetsAt = decoded.five_hour?.resets_at.flatMap(parseISO)
+            snapshot.weeklyResetsAt = decoded.seven_day?.resets_at.flatMap(parseISO)
+            return snapshot
+        }
+
+        return heuristicParse(data, into: snapshot)
+    }
+
+    private static func parseISO(_ s: String) -> Date? {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: s) { return d }
+        iso.formatOptions = [.withInternetDateTime]
+        return iso.date(from: s)
+    }
+
+    // MARK: - Repli heuristique (si le schéma évolue)
+
+    private static func heuristicParse(_ data: Data, into snapshot: UsageSnapshot) -> UsageSnapshot {
+        var snapshot = snapshot
         guard let root = try? JSONSerialization.jsonObject(with: data) else { return snapshot }
         var percents: [(path: String, percent: Double)] = []
         var resets: [(path: String, date: Date)] = []

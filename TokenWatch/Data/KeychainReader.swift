@@ -50,21 +50,42 @@ enum KeychainReader {
     /// Lit les identifiants OAuth depuis le trousseau. Nécessite que l'app
     /// tourne sous le même utilisateur que Claude Code (non sandboxée pour
     /// l'instant — cf. « Risque n°1 » dans CLAUDE.md).
+    ///
+    /// Il peut exister **plusieurs** entrées pour le même service (p. ex. une
+    /// périmée créée un jour où `claude` a tourné en `sudo`, sous le compte
+    /// `root`, et une valide sous le compte utilisateur courant). On les
+    /// récupère toutes et on garde la meilleure : compte courant en priorité,
+    /// sinon la date d'expiration la plus lointaine.
     static func readCredentials() throws -> ClaudeCredentials {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
         ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
         guard status == errSecSuccess else {
             throw status == errSecItemNotFound
                 ? KeychainReaderError.notFound
                 : KeychainReaderError.status(status)
         }
-        guard let data = item as? Data else { throw KeychainReaderError.malformed }
-        return try JSONDecoder().decode(ClaudeCredentials.self, from: data)
+        guard let items = result as? [[String: Any]] else { throw KeychainReaderError.malformed }
+
+        let currentUser = NSUserName()
+        let candidates: [(account: String?, creds: ClaudeCredentials)] = items.compactMap { item in
+            guard let data = item[kSecValueData as String] as? Data,
+                  let creds = try? JSONDecoder().decode(ClaudeCredentials.self, from: data)
+            else { return nil }
+            return (item[kSecAttrAccount as String] as? String, creds)
+        }
+        guard !candidates.isEmpty else { throw KeychainReaderError.malformed }
+
+        // 1) entrée du compte courant si présente ; 2) sinon la moins expirée.
+        if let mine = candidates.first(where: { $0.account == currentUser }) {
+            return mine.creds
+        }
+        return candidates.max { ($0.creds.expiresAt ?? 0) < ($1.creds.expiresAt ?? 0) }!.creds
     }
 }
