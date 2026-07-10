@@ -29,6 +29,29 @@ struct MenuContentView: View {
 
             Divider()
 
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Rafraîchissement auto").font(.caption)
+                    Spacer()
+                    Text(formattedInterval(store.refreshInterval))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Slider(
+                    value: Binding(
+                        get: { store.refreshInterval },
+                        set: { store.setRefreshInterval($0) }
+                    ),
+                    in: UsageStore.refreshIntervalRange,
+                    step: 10
+                )
+                Text("30 s (réactif) → 20 min (économique)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
             HStack {
                 Button("Rafraîchir") { Task { await store.refresh() } }
                 if store.snapshot.rawJSON != nil {
@@ -74,5 +97,13 @@ struct MenuContentView: View {
         guard let raw = store.snapshot.rawJSON else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(raw, forType: .string)
+    }
+
+    private func formattedInterval(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded())
+        guard total >= 60 else { return "\(total) s" }
+        let minutes = total / 60
+        let remainder = total % 60
+        return remainder == 0 ? "\(minutes) min" : "\(minutes) min \(remainder) s"
     }
 }

@@ -17,16 +17,26 @@ final class UsageStore: ObservableObject {
     @Published private(set) var snapshot: UsageSnapshot = .empty
     @Published private(set) var lastError: String?
     @Published private(set) var isRefreshing = false
+    @Published private(set) var refreshInterval: TimeInterval
 
     private let client = UsageClient()
     private var watcher: ActivityWatcher?
     private var fallbackTimer: Timer?
+
+    /// Plage réglable du timer de secours : 30 s (profil réactif) à 20 min
+    /// (profil économique). Le refresh événementiel (FSEvents) n'est pas
+    /// affecté par ce réglage.
+    static let refreshIntervalRange: ClosedRange<TimeInterval> = 30...1200
+    static let defaultRefreshInterval: TimeInterval = 150
+    private static let refreshIntervalDefaultsKey = "refreshIntervalSeconds"
 
     private var projectsPath: String {
         (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
     }
 
     init() {
+        let stored = UserDefaults.standard.double(forKey: Self.refreshIntervalDefaultsKey)
+        refreshInterval = Self.refreshIntervalRange.contains(stored) ? stored : Self.defaultRefreshInterval
         start()
     }
 
@@ -39,7 +49,20 @@ final class UsageStore: ObservableObject {
         watcher.start()
         self.watcher = watcher
 
-        fallbackTimer = Timer.scheduledTimer(withTimeInterval: 150, repeats: true) { [weak self] _ in
+        scheduleFallbackTimer()
+    }
+
+    /// Change l'intervalle du timer de secours (persisté, appliqué immédiatement).
+    func setRefreshInterval(_ seconds: TimeInterval) {
+        let clamped = min(max(seconds, Self.refreshIntervalRange.lowerBound), Self.refreshIntervalRange.upperBound)
+        refreshInterval = clamped
+        UserDefaults.standard.set(clamped, forKey: Self.refreshIntervalDefaultsKey)
+        scheduleFallbackTimer()
+    }
+
+    private func scheduleFallbackTimer() {
+        fallbackTimer?.invalidate()
+        fallbackTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
         }
     }
