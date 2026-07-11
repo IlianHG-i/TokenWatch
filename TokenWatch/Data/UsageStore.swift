@@ -137,6 +137,6 @@ final class UsageStore: ObservableObject {
     var menuBarText: String {
         let five = snapshot.fiveHourPercent.map { "\(Int($0.rounded()))%" } ?? "—"
         let weekly = snapshot.weeklyPercent.map { "\(Int($0.rounded()))%" } ?? "—"
-        return "\(five)|\(weekly)"
+        return "\(five) | \(weekly)"
     }
 }
