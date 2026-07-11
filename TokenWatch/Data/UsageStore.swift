@@ -45,6 +45,11 @@ final class UsageStore: ObservableObject {
     /// Renseigné après un 429 : aucun nouvel appel réseau avant cette date,
     /// y compris pour les refresh automatiques déclenchés entre-temps.
     private var rateLimitedUntil: Date?
+    /// Nombre de 429 consécutifs (remis à zéro dès qu'un refresh réussit) —
+    /// alimente le backoff exponentiel ci-dessous.
+    private var consecutiveRateLimitCount = 0
+    private static let baseRateLimitBackoff: TimeInterval = 60
+    private static let maxRateLimitBackoff: TimeInterval = 600
 
     private var projectsPath: String {
         (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
@@ -108,10 +113,21 @@ final class UsageStore: ObservableObject {
         do {
             snapshot = try await client.fetch()
             lastError = nil
+            consecutiveRateLimitCount = 0
         } catch UsageClientError.http(let status, _, let retryAfter) where status == 429 {
-            let delay = retryAfter ?? 60
-            rateLimitedUntil = Date().addingTimeInterval(delay)
-            lastError = String(describing: UsageClientError.http(status: 429, body: "", retryAfter: delay))
+            consecutiveRateLimitCount += 1
+            // Le serveur peut renvoyer `Retry-After: 0` (observé en pratique),
+            // ce qui ne veut rien dire — un `retryAfter ?? 60` s'y ferait
+            // piéger (0 n'est pas nil) et annulerait tout backoff. On ignore
+            // les valeurs non exploitables et on applique un backoff
+            // exponentiel maison (60 s, 120 s, 240 s… plafonné à 10 min).
+            let serverHint = (retryAfter ?? 0) > 1 ? retryAfter : nil
+            let backoff = serverHint ?? min(
+                Self.baseRateLimitBackoff * pow(2, Double(consecutiveRateLimitCount - 1)),
+                Self.maxRateLimitBackoff
+            )
+            rateLimitedUntil = Date().addingTimeInterval(backoff)
+            lastError = String(describing: UsageClientError.http(status: 429, body: "", retryAfter: backoff))
         } catch {
             lastError = String(describing: error)
         }
