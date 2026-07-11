@@ -1,12 +1,16 @@
 import Foundation
 
 enum UsageClientError: Error, CustomStringConvertible {
-    case http(status: Int, body: String)
+    case http(status: Int, body: String, retryAfter: TimeInterval?)
 
     var description: String {
         switch self {
-        case .http(let status, let body):
+        case .http(let status, let body, let retryAfter):
             if status == 401 { return "Non autorisé (401) — le token OAuth a peut-être expiré." }
+            if status == 429 {
+                let delay = Int((retryAfter ?? 60).rounded())
+                return "Trop de requêtes (429) — nouvelle tentative dans \(delay) s."
+            }
             return "HTTP \(status): \(body.prefix(200))"
         }
     }
@@ -29,7 +33,7 @@ struct UsageClient {
 
         do {
             return try await get(with: creds.accessToken)
-        } catch UsageClientError.http(let status, _) where status == 401 {
+        } catch UsageClientError.http(let status, _, _) where status == 401 {
             // Filet : token invalidé côté serveur → un refresh + retry unique.
             let refreshed = try await OAuthRefresher.refresh(using: creds)
             return try await get(with: refreshed.accessToken)
@@ -47,8 +51,10 @@ struct UsageClient {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         guard (200..<300).contains(http.statusCode) else {
+            let retryAfter = http.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init)
             throw UsageClientError.http(status: http.statusCode,
-                                        body: String(data: data, encoding: .utf8) ?? "")
+                                        body: String(data: data, encoding: .utf8) ?? "",
+                                        retryAfter: retryAfter)
         }
         return Self.parse(data)
     }

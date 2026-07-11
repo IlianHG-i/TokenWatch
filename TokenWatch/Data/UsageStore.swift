@@ -5,13 +5,17 @@ import SwiftUI
 ///
 /// Stratégie « événementiel d'abord » (cf. CLAUDE.md) :
 /// 1. refresh immédiat au lancement ;
-/// 2. refresh déclenché par FSEvents quand Claude Code écrit sur le disque ;
-/// 3. timer de secours toutes les 2 min 30 comme filet.
+/// 2. refresh déclenché par FSEvents quand Claude Code écrit sur le disque
+///    (avec un plancher de 10 s entre deux appels, cf. `minAutoRefreshGap`) ;
+/// 3. timer de secours réglable (30 s à 20 min, défaut 2 min 30) comme filet.
 ///
 /// Le filet couvre aussi l'usage via Claude Desktop / claude.ai, qui ne
 /// touchent pas `~/.claude/projects` et ne déclenchent donc pas (2) — la
 /// limite affichée reste exacte dans tous les cas (l'endpoint `/api/oauth/usage`
 /// est au niveau du compte, pas du client), seul le délai de mise à jour varie.
+///
+/// Sur 429 (trop de requêtes), aucun nouvel appel réseau n'est tenté avant la
+/// fin du cooldown (`Retry-After` du serveur, ou 60 s par défaut).
 @MainActor
 final class UsageStore: ObservableObject {
     @Published private(set) var snapshot: UsageSnapshot = .empty
@@ -29,6 +33,18 @@ final class UsageStore: ObservableObject {
     static let refreshIntervalRange: ClosedRange<TimeInterval> = 30...1200
     static let defaultRefreshInterval: TimeInterval = 150
     private static let refreshIntervalDefaultsKey = "refreshIntervalSeconds"
+
+    /// Plancher entre deux appels réseau déclenchés par les événements FSEvents
+    /// (indépendant du debounce du watcher, qui ne fait que coalescer les
+    /// rafales sur 2,5 s). Sans ce plancher, une session Claude Code très
+    /// active — dont les propres logs vivent dans `~/.claude/projects`,
+    /// surveillé par l'app — peut déclencher un refresh toutes les
+    /// quelques secondes en continu et finir par se faire limiter (HTTP 429).
+    private static let minAutoRefreshGap: TimeInterval = 10
+    private var lastAttemptAt: Date = .distantPast
+    /// Renseigné après un 429 : aucun nouvel appel réseau avant cette date,
+    /// y compris pour les refresh automatiques déclenchés entre-temps.
+    private var rateLimitedUntil: Date?
 
     private var projectsPath: String {
         (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
@@ -67,21 +83,44 @@ final class UsageStore: ObservableObject {
         }
     }
 
-    func refresh() async {
+    /// - Parameter force: ignore le plancher anti-martèlement (utilisé par le
+    ///   bouton "Rafraîchir" manuel). Le cooldown après un 429 s'applique
+    ///   toujours, même en mode forcé, pour ne jamais aggraver une limitation
+    ///   déjà en cours.
+    func refresh(force: Bool = false) async {
+        if let until = rateLimitedUntil {
+            guard Date() >= until else {
+                lastError = String(describing: UsageClientError.http(
+                    status: 429, body: "", retryAfter: until.timeIntervalSinceNow))
+                return
+            }
+            rateLimitedUntil = nil
+        }
+
         guard !isRefreshing else { return }
+        if !force {
+            guard Date().timeIntervalSince(lastAttemptAt) >= Self.minAutoRefreshGap else { return }
+        }
+        lastAttemptAt = Date()
         isRefreshing = true
         defer { isRefreshing = false }
 
         do {
             snapshot = try await client.fetch()
             lastError = nil
+        } catch UsageClientError.http(let status, _, let retryAfter) where status == 429 {
+            let delay = retryAfter ?? 60
+            rateLimitedUntil = Date().addingTimeInterval(delay)
+            lastError = String(describing: UsageClientError.http(status: 429, body: "", retryAfter: delay))
         } catch {
             lastError = String(describing: error)
         }
     }
 
+    /// Texte de la barre de menu : 5 h et hebdo côte à côte, séparés par « | ».
     var menuBarText: String {
-        guard let percent = snapshot.fiveHourPercent else { return "—" }
-        return "\(Int(percent.rounded()))%"
+        let five = snapshot.fiveHourPercent.map { "\(Int($0.rounded()))%" } ?? "—"
+        let weekly = snapshot.weeklyPercent.map { "\(Int($0.rounded()))%" } ?? "—"
+        return "\(five)|\(weekly)"
     }
 }

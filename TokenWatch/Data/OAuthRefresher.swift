@@ -44,7 +44,7 @@ enum OAuthRefresher {
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? -1
-            throw UsageClientError.http(status: status, body: String(data: data, encoding: .utf8) ?? "")
+            throw UsageClientError.http(status: status, body: String(data: data, encoding: .utf8) ?? "", retryAfter: nil)
         }
 
         let token = try JSONDecoder().decode(TokenResponse.self, from: data)
