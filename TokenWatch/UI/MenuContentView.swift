@@ -53,7 +53,7 @@ struct MenuContentView: View {
             Divider()
 
             HStack {
-                Button("Rafraîchir") { Task { await store.refresh() } }
+                Button("Rafraîchir") { Task { await store.refresh(force: true) } }
                 if store.snapshot.rawJSON != nil {
                     Button("Copier JSON") { copyRawJSON() }
                         .help("Copie la réponse brute de /api/oauth/usage (pour figer le mapping des champs)")
