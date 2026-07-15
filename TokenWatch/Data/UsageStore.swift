@@ -66,6 +66,13 @@ final class UsageStore: ObservableObject {
     private static let wakeGracePeriod: TimeInterval = 30
     private var wakeGraceUntil: Date = .distantPast
 
+    /// Seuils de la fenêtre 5 h (session) qui déclenchent une notification
+    /// macOS, chacun une seule fois par fenêtre. La fenêtre hebdomadaire
+    /// n'est pas concernée — seule la session l'est.
+    private static let notificationThresholds: [Int] = [80, 90]
+    private var firedThresholds: Set<Int> = []
+    private var lastKnownFiveHourResetsAt: Date?
+
     private var projectsPath: String {
         (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
     }
@@ -77,6 +84,7 @@ final class UsageStore: ObservableObject {
     }
 
     func start() {
+        NotificationManager.requestAuthorization()
         Task { await refresh() }
 
         let watcher = ActivityWatcher(path: projectsPath) { [weak self] in
@@ -138,6 +146,7 @@ final class UsageStore: ObservableObject {
             snapshot = try await client.fetch()
             lastError = nil
             consecutiveRateLimitCount = 0
+            handleSessionNotifications(for: snapshot)
         } catch UsageClientError.http(let status, _, let retryAfter) where status == 429 {
             consecutiveRateLimitCount += 1
             // Le serveur peut renvoyer `Retry-After: 0` (observé en pratique),
@@ -154,6 +163,33 @@ final class UsageStore: ObservableObject {
             lastError = String(describing: UsageClientError.http(status: 429, body: "", retryAfter: backoff))
         } catch {
             lastError = String(describing: error)
+        }
+    }
+
+    /// Notifie sur franchissement des seuils de la session (5 h) et sur son
+    /// reset. Un même seuil ne notifie qu'une fois par fenêtre ; le reset
+    /// (détecté via le changement de `fiveHourResetsAt`) réarme les seuils
+    /// pour la fenêtre suivante.
+    private func handleSessionNotifications(for snapshot: UsageSnapshot) {
+        if let resetsAt = snapshot.fiveHourResetsAt {
+            if let last = lastKnownFiveHourResetsAt, resetsAt != last, last <= Date() {
+                NotificationManager.send(
+                    title: "Session Claude réinitialisée",
+                    body: "Ta fenêtre de 5 h vient de repartir à zéro."
+                )
+                firedThresholds.removeAll()
+            }
+            lastKnownFiveHourResetsAt = resetsAt
+        }
+
+        guard let percent = snapshot.fiveHourPercent else { return }
+        for threshold in Self.notificationThresholds
+        where percent >= Double(threshold) && !firedThresholds.contains(threshold) {
+            firedThresholds.insert(threshold)
+            NotificationManager.send(
+                title: "Session Claude à \(threshold) %",
+                body: "Fenêtre 5 h : \(Int(percent.rounded()))%."
+            )
         }
     }
 
