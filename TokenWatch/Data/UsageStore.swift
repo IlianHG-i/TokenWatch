@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 
@@ -16,6 +17,12 @@ import SwiftUI
 ///
 /// Sur 429 (trop de requêtes), aucun nouvel appel réseau n'est tenté avant la
 /// fin du cooldown (`Retry-After` du serveur, ou 60 s par défaut).
+///
+/// Au réveil du Mac (`NSWorkspace.didWakeNotification`), les refresh
+/// automatiques sont suspendus pendant 30 s : le trousseau peut être encore
+/// verrouillé juste après le réveil, et un accès à ce moment-là fait
+/// réapparaître la popup d'autorisation de TokenWatch en pleine reprise de
+/// veille. Le bouton "Rafraîchir" manuel n'est pas concerné.
 @MainActor
 final class UsageStore: ObservableObject {
     @Published private(set) var snapshot: UsageSnapshot = .empty
@@ -51,6 +58,14 @@ final class UsageStore: ObservableObject {
     private static let baseRateLimitBackoff: TimeInterval = 60
     private static let maxRateLimitBackoff: TimeInterval = 600
 
+    /// Au réveil du Mac, le trousseau peut être momentanément reverrouillé
+    /// (écran de session pas encore déverrouillé) — un refresh automatique
+    /// déclenché juste à ce moment-là fait ressurgir la popup d'autorisation
+    /// de TokenWatch en pleine reprise de veille. On laisse une marge avant
+    /// de retenter un accès automatique après un réveil.
+    private static let wakeGracePeriod: TimeInterval = 30
+    private var wakeGraceUntil: Date = .distantPast
+
     private var projectsPath: String {
         (NSHomeDirectory() as NSString).appendingPathComponent(".claude/projects")
     }
@@ -71,6 +86,14 @@ final class UsageStore: ObservableObject {
         self.watcher = watcher
 
         scheduleFallbackTimer()
+
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.wakeGraceUntil = Date().addingTimeInterval(Self.wakeGracePeriod)
+            }
+        }
     }
 
     /// Change l'intervalle du timer de secours (persisté, appliqué immédiatement).
@@ -104,6 +127,7 @@ final class UsageStore: ObservableObject {
 
         guard !isRefreshing else { return }
         if !force {
+            guard Date() >= wakeGraceUntil else { return }
             guard Date().timeIntervalSince(lastAttemptAt) >= Self.minAutoRefreshGap else { return }
         }
         lastAttemptAt = Date()
