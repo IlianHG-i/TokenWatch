@@ -50,6 +50,13 @@ struct MenuContentView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Toggle("Lancer au démarrage", isOn: Binding(
+                get: { store.launchAtLogin },
+                set: { store.setLaunchAtLogin($0) }
+            ))
+            .toggleStyle(.checkbox)
+            .font(.caption)
+
             Divider()
 
             HStack {

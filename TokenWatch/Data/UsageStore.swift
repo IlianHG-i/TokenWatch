@@ -29,6 +29,7 @@ final class UsageStore: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var isRefreshing = false
     @Published private(set) var refreshInterval: TimeInterval
+    @Published private(set) var launchAtLogin: Bool = LoginItemManager.isEnabled
 
     private let client = UsageClient()
     private var watcher: ActivityWatcher?
@@ -110,6 +111,14 @@ final class UsageStore: ObservableObject {
         refreshInterval = clamped
         UserDefaults.standard.set(clamped, forKey: Self.refreshIntervalDefaultsKey)
         scheduleFallbackTimer()
+    }
+
+    /// Active/désactive le lancement automatique de TokenWatch à la connexion.
+    @discardableResult
+    func setLaunchAtLogin(_ enabled: Bool) -> Bool {
+        let success = LoginItemManager.setEnabled(enabled)
+        launchAtLogin = LoginItemManager.isEnabled
+        return success
     }
 
     private func scheduleFallbackTimer() {
